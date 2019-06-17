@@ -4,9 +4,6 @@ import sys
 import re
 from enum import Enum, auto
 
-# Hardcoded 5x5 tile board size.
-MAX_X, MAX_Y = 4, 4
-
 # Regex for PLACE command.
 PLACE_RE = re.compile(r'PLACE (\d+),(\d+),(NORTH|SOUTH|EAST|WEST)')
 
@@ -17,14 +14,18 @@ class Point:
         self.x = x
         self.y = y
 
-    def on_board(self):
-        return 0 <= self.x <= MAX_X and 0 <= self.y <= MAX_Y
+    def on_table(self, ne_corner):
+        return 0 <= self.x <= ne_corner.x and 0 <= self.y <= ne_corner.y
 
     def __add__(self, point):
         return Point(self.x + point.x, self.y + point.y)
 
-# Sentinel for initial off-board position.
-OFF_BOARD_POSITION = Point(-1, -1)
+# North-east corner point for default 5 x 5 table top.
+# Origin "south-west" corner is (0, 0).
+DEFAULT_NE_CORNER = Point(4, 4)
+
+# Sentinel for initial off-table position.
+OFF_TABLE_POSITION = Point(-1, -1)
 
 
 class Orientation(Enum):
@@ -33,7 +34,7 @@ class Orientation(Enum):
     EAST = auto()
     WEST = auto()
 
-# Mapping of board translations given current orientation.
+# Mapping of table translations given current orientation.
 MOVES = {
     Orientation.NORTH: Point(0, 1),
     Orientation.SOUTH: Point(0, -1),
@@ -44,25 +45,27 @@ MOVES = {
 
 class Robot:
 
-    def __init__(self, report_file=sys.stdout):
+    def __init__(self, table_ne_point=DEFAULT_NE_CORNER, report_file=sys.stdout):
+        if table_ne_point.x < 1 or table_ne_point.y < 1:
+            # Table must be at least 2 x 2 units.
+            raise ValueError("Invalid table size!")
+        self.table_ne_point = table_ne_point
         self.report_file = report_file
-        self.position = OFF_BOARD_POSITION
+        self.position = OFF_TABLE_POSITION
         # Initial orientation is arbitrary. We use position to determine if
-        # robot is on board.
+        # robot is on table.
         self.orientation = Orientation.NORTH
 
-    def on_board(self):
-        return self.position.on_board()
+    def on_table(self):
+        return self.position.on_table(self.table_ne_point)
 
     def place(self, point, orientation):
-        if point.on_board() and orientation in Orientation:
+        if point.on_table(self.table_ne_point) and orientation in Orientation:
             self.position = point
             self.orientation = orientation
-            return True
-        return False
 
     def turn_left(self):
-        if self.on_board():
+        if self.on_table():
             # Set new orientation.
             self.orientation = {
                 Orientation.NORTH: Orientation.WEST,
@@ -70,11 +73,9 @@ class Robot:
                 Orientation.EAST: Orientation.NORTH,
                 Orientation.WEST: Orientation.SOUTH,
             }[self.orientation]
-            return True
-        return False
 
     def turn_right(self):
-        if self.on_board():
+        if self.on_table():
             # Set new orientation.
             self.orientation = {
                 Orientation.NORTH: Orientation.EAST,
@@ -82,23 +83,17 @@ class Robot:
                 Orientation.EAST: Orientation.SOUTH,
                 Orientation.WEST: Orientation.NORTH,
             }[self.orientation]
-            return True
-        return False
 
     def move(self):
-        if self.on_board():
-            # Only update position if new position is on board.
+        if self.on_table():
+            # Only update position if new position is on table.
             new_position = self.position + MOVES[self.orientation]
-            if new_position.on_board():
+            if new_position.on_table(self.table_ne_point):
                 self.position = new_position
-                return True
-        return False
 
     def report(self):
-        if self.on_board():
+        if self.on_table():
             print(f'{self.position.x},{self.position.y},{self.orientation.name}', file=self.report_file)
-            return True
-        return False
 
 
 class CommandParser:
@@ -106,31 +101,22 @@ class CommandParser:
     def __init__(self, robot, input_file=sys.stdin):
         self.robot = robot
         self.input_file = input_file
-        # Flag that's set after first successful placement of robot on board.
-        self.robot_placed = False
 
     def run(self):
         for line in self.input_file:
-            line = line.strip() # Remove line terminator.
-            place_match = PLACE_RE.match(line)
-            # If robot hasn't been placed on board and current command
-            # is not a PLACE command, ignore current command line.
-            if not self.robot_placed and not place_match:
-                continue
+            command = line.strip() # Remove line terminator.
+            place_match = PLACE_RE.match(command)
             if place_match:
                 x, y, orientation = place_match.groups()
                 point = Point(int(x), int(y))
                 self.robot.place(point, Orientation[orientation])
-                if self.robot.on_board():
-                    # Valid PLACE command has been executed.
-                    self.robot_placed = True
-            elif line == 'MOVE':
+            elif command == 'MOVE':
                 self.robot.move()
-            elif line == 'LEFT':
+            elif command == 'LEFT':
                 self.robot.turn_left()
-            elif line == 'RIGHT':
+            elif command == 'RIGHT':
                 self.robot.turn_right()
-            elif line == 'REPORT':
+            elif command == 'REPORT':
                 self.robot.report()
             else:
                 pass # Ignore any invalid command lines.
